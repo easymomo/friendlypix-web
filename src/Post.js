@@ -53,28 +53,27 @@ export default class Post {
   /**
    * Loads the given post's details.
    */
-  loadPost(postId) {
+  async loadPost(postId) {
     // Load the posts information.
-    this.firebaseHelper.getPostData(postId).then((snapshot) => {
-      const post = snapshot.val();
-      // Clear listeners and previous post data.
-      this.clear();
-      if (!post) {
-        const data = {
-          message: 'This post does not exists.',
-          timeout: 5000,
-        };
-        this.toast[0].MaterialSnackbar.showSnackbar(data);
-        if (this.auth.currentUser) {
-          page(`/user/${this.auth.currentUser.uid}`);
-        } else {
-          page(`/feed`);
-        }
+    const snapshot = await this.firebaseHelper.getPostData(postId);
+    const post = snapshot.val();
+    // Clear listeners and previous post data.
+    this.clear();
+    if (!post) {
+      const data = {
+        message: 'This post does not exists.',
+        timeout: 5000,
+      };
+      MaterialUtils.showSnackbar(this.toast, data);
+      if (this.auth.currentUser) {
+        page(`/user/${this.auth.currentUser.uid}`);
       } else {
-        this.fillPostData(snapshot.key, post.thumb_url || post.url, post.text, post.author,
-            post.timestamp, post.thumb_storage_uri, post.full_storage_uri, post.full_url);
+        page(`/home`);
       }
-    });
+    } else {
+      this.fillPostData(snapshot.key, post.thumb_url || post.url, post.text, post.author,
+          post.timestamp, post.thumb_storage_uri, post.full_storage_uri, post.full_url);
+    }
   }
 
   /**
@@ -103,8 +102,11 @@ export default class Post {
    * Displays a single comment or replace the existing one with new content.
    */
   displayComment(comment, postId, commentId, prepend = true) {
+    if ($(`#comment-${commentId}`, this.postElement).length) {
+      return;
+    }
     const newElement = this.createComment(comment.author, comment.text, postId,
-        commentId, this.auth.currentUser && comment.author.uid === this.auth.currentUser.userId);
+        commentId, this.auth.currentUser && comment.author.uid === this.auth.currentUser.uid);
     if (prepend) {
       $('.fp-comments', this.postElement).prepend(newElement);
     } else {
@@ -118,7 +120,7 @@ export default class Post {
       if (updatedComment) {
         const updatedElement = this.createComment(updatedComment.author,
           updatedComment.text, postId, commentId,
-          this.auth.currentUser && updatedComment.author.uid === this.auth.currentUser.userId);
+          this.auth.currentUser && updatedComment.author.uid === this.auth.currentUser.uid);
         const element = $('#comment-' + commentId);
         element.replaceWith(updatedElement);
       } else {
@@ -138,11 +140,12 @@ export default class Post {
       nextPageButton.show();
       nextPageButton.unbind('click');
       nextPageButton.prop('disabled', false);
-      nextPageButton.click(() => nextPage().then((data) => {
+      nextPageButton.click(async () => {
+        const data = await nextPage();
         nextPageButton.prop('disabled', true);
         this.displayComments(postId, data.entries);
         this.displayNextPageButton(postId, data.nextPage);
-      }));
+      });
     } else {
       nextPageButton.hide();
     }
@@ -152,7 +155,7 @@ export default class Post {
    * Fills the post's Card with the given details.
    * Also sets all auto updates and listeners on the UI elements of the post.
    */
-  fillPostData(postId, thumbUrl, imageText, author = {}, timestamp, thumbStorageUri, picStorageUri, picUrl) {
+  async fillPostData(postId, thumbUrl, imageText, author = {}, timestamp, thumbStorageUri, picStorageUri, picUrl) {
     const post = this.postElement;
 
     MaterialUtils.upgradeDropdowns(this.postElement);
@@ -172,18 +175,17 @@ export default class Post {
     });
 
     if (this.auth.currentUser) {
-      this.firebaseHelper.getPrivacySettings(this.auth.currentUser.uid).then((snapshot) => {
-        let socialEnabled = false;
-        if (snapshot.val() !== null) {
-          socialEnabled = snapshot.val().social;
-        }
+      const snapshot = await this.firebaseHelper.getPrivacySettings(this.auth.currentUser.uid);
+      let socialEnabled = false;
+      if (snapshot.val() !== null) {
+        socialEnabled = snapshot.val().social;
+      }
 
-        this._setupDate(postId, timestamp);
-        this._setupDeleteButton(postId, author, picStorageUri, thumbStorageUri);
-        this._setupReportButton(postId);
-        this._setupLikeCountAndStatus(postId, socialEnabled);
-        this._setupComments(postId, author, imageText, socialEnabled);
-      });
+      this._setupDate(postId, timestamp);
+      this._setupDeleteButton(postId, author, picStorageUri, thumbStorageUri);
+      this._setupReportButton(postId);
+      this._setupLikeCountAndStatus(postId, socialEnabled);
+      this._setupComments(postId, author, imageText, socialEnabled);
     } else {
       this._setupDate(postId, timestamp);
       this._setupDeleteButton(postId, author, picStorageUri, thumbStorageUri);
@@ -251,25 +253,12 @@ export default class Post {
    * Shows comments and binds actions to the comments form.
    * @private
    */
-  _setupComments(postId, author, imageText, socialEnabled = false) {
+  async _setupComments(postId, author, imageText, socialEnabled = false) {
     const post = this.postElement;
 
     // Creates the initial comment with the post's text.
     $('.fp-first-comment', post).empty();
     $('.fp-first-comment', post).append(this.createComment(author, imageText, postId));
-
-    // Load first page of comments and listen to new comments.
-    this.firebaseHelper.getComments(postId).then((data) => {
-      $('.fp-comments', post).empty();
-      this.displayComments(postId, data.entries);
-      this.displayNextPageButton(postId, data.nextPage);
-
-      // Display any new comments.
-      const commentIds = Object.keys(data.entries);
-      this.firebaseHelper.subscribeToComments(postId, (commentId, commentData) => {
-        this.displayComment(commentData, postId, commentId, false);
-      }, commentIds ? commentIds[commentIds.length - 1] : 0);
-    });
 
     if (this.auth.currentUser && socialEnabled) {
       // Bind comments form posting.
@@ -289,6 +278,18 @@ export default class Post {
       // Show comments form.
       $('.fp-action', post).css('display', 'flex');
     }
+
+    // Load first page of comments and listen to new comments.
+    const data = await this.firebaseHelper.getComments(postId);
+    $('.fp-comments', post).empty();
+    this.displayComments(postId, data.entries);
+    this.displayNextPageButton(postId, data.nextPage);
+
+    // Display any new comments.
+    const commentIds = Object.keys(data.entries);
+    this.firebaseHelper.subscribeToComments(postId, (commentId, commentData) => {
+      this.displayComment(commentData, postId, commentId, false);
+    }, commentIds ? commentIds[commentIds.length - 1] : 0);
   }
 
   /**
@@ -301,8 +302,8 @@ export default class Post {
     if (this.auth.currentUser) {
       $('.fp-report-post', post).show();
       $('.fp-report-post', post).off('click');
-      $('.fp-report-post', post).click(() => {
-        swal({
+      $('.fp-report-post', post).click(async () => {
+        const willReport = await swal({
           title: 'Are you sure?',
           text: 'You are about to flag this post for inappropriate content! An administrator will review your claim.',
           icon: 'warning',
@@ -323,12 +324,11 @@ export default class Post {
             },
           },
           closeOnEsc: true,
-        }).then((willReport) => {
-          if (!willReport) {
-            return;
-          }
+        });
+        if (willReport) {
           $('.fp-report-post', post).prop('disabled', true);
-          return this.firebaseHelper.reportPost(postId).then(() => {
+          try {
+            await this.firebaseHelper.reportPost(postId);
             swal({
               title: 'Reported!',
               text: 'This post has been reported. Please allow some time before an admin reviews it.',
@@ -336,16 +336,16 @@ export default class Post {
               timer: 2000,
             });
             $('.fp-report-post', post).prop('disabled', false);
-          }).catch((error) => {
+          } catch(error) {
             swal.close();
             $('.fp-report-post', post).prop('disabled', false);
             const data = {
               message: `There was an error reporting your post: ${error}`,
               timeout: 5000,
             };
-            this.toast[0].MaterialSnackbar.showSnackbar(data);
-          });
-        });
+            MaterialUtils.showSnackbar(this.toast, data);
+          }
+        }
       });
     }
   }
@@ -364,8 +364,8 @@ export default class Post {
     }
 
     $('.fp-delete-post', post).off('click');
-    $('.fp-delete-post', post).click(() => {
-      swal({
+    $('.fp-delete-post', post).click(async () => {
+      const willDelete = await swal({
         title: 'Are you sure?',
         text: 'You are about to delete this post. Once deleted, you will not be able to recover it!',
         icon: 'warning',
@@ -386,12 +386,11 @@ export default class Post {
           },
         },
         closeOnEsc: true,
-      }).then((willDelete) => {
-        if (!willDelete) {
-          return;
-        }
+      });
+      if (willDelete) {
         $('.fp-delete-post', post).prop('disabled', true);
-        return this.firebaseHelper.deletePost(postId, picStorageUri, thumbStorageUri).then(() => {
+        try {
+          await this.firebaseHelper.deletePost(postId, picStorageUri, thumbStorageUri);
           swal({
             title: 'Deleted!',
             text: 'Your post has been deleted.',
@@ -400,7 +399,7 @@ export default class Post {
           });
           $('.fp-delete-post', post).prop('disabled', false);
           page(`/user/${this.auth.currentUser.uid}`);
-        }).catch((error) => {
+        } catch(error) {
           swal.close();
           $('.fp-delete-post', post).prop('disabled', false);
           const data = {
@@ -408,8 +407,8 @@ export default class Post {
             timeout: 5000,
           };
           this.toast[0].MaterialSnackbar.showSnackbar(data);
-        });
-      });
+        }
+      }
     });
   }
 
@@ -582,4 +581,4 @@ export default class Post {
     }
     return timeText;
   }
-};
+}

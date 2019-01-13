@@ -29,36 +29,36 @@ export default class Router {
    * Initializes the Friendly Pix controller/router.
    * @constructor
    */
-  constructor(loadApp, auth) {
+  constructor(auth) {
     this.auth = auth;
 
     // Dom elements.
     this.pagesElements = $('[id^=page-]');
-    this.splashLogin = $('#login', '#page-splash');
 
-    // Make sure /add is never opened on website load.
-    if (window.location.pathname === '/add') {
-      page('/');
-    }
+    // Load the rest of the app - which is split - asynchroneously to speed up initial load.
+    const loadComponents = import(/* webpackPrefetch: true */ './async-loaded-components');
+
+    // Shortcuts to async loaded components.
+    const loadUser = async (userId) => (await loadComponents).userPage.loadUser(userId);
+    const searchHashtag = async (hashtag) => (await loadComponents).searchPage.loadHashtag(hashtag);
+    const showHomeFeed = async () => (await loadComponents).feed.showHomeFeed();
+    const showGeneralFeed = async () => (await loadComponents).feed.showGeneralFeed();
+    const clearFeed = async () => (await loadComponents).feed.clear();
+    const showPost = async (postId) => (await loadComponents).post.loadPost(postId);
+
+    // Configuring middlwares.
+    page(Router.setLinkAsActive);
 
     // Configuring routes.
-    const pipe = Router.pipe;
-    const displayPage = this.displayPage.bind(this);
-    const loadUser = (userId) => loadApp().then(({userPage}) => userPage.loadUser(userId));
-    const searchHashtag = (hashtag) => loadApp().then(({searchPage}) => searchPage.loadHashtag(hashtag));
-    const showHomeFeed = () => loadApp().then(({feed}) => feed.showHomeFeed());
-    const showGeneralFeed = () => loadApp().then(({feed}) => feed.showGeneralFeed());
-    const clearFeed = () => loadApp().then(({feed}) => feed.clear());
-    const showPost = (postId) => loadApp().then(({post}) => post.loadPost(postId));
-
-    page('/', pipe(showHomeFeed, null, true), pipe(displayPage, {pageId: 'feed', onlyAuthed: true}));
-    page('/feed', pipe(showGeneralFeed, null, true), pipe(displayPage, {pageId: 'feed'}));
-    page('/post/:postId', pipe(showPost, null, true), pipe(displayPage, {pageId: 'post'}));
-    page('/user/:userId', pipe(loadUser, null, true), pipe(displayPage, {pageId: 'user-info'}));
-    page('/search/:hashtag', pipe(searchHashtag, null, true), pipe(displayPage, {pageId: 'search'}));
-    page('/about', pipe(clearFeed, null, true), pipe(displayPage, {pageId: 'about'}));
-    page('/terms', pipe(clearFeed, null, true), pipe(displayPage, {pageId: 'terms'}));
-    page('/add', pipe(displayPage, {pageId: 'add', onlyAuthed: true}));
+    page('/', () => {this.redirectHomeIfSignedIn(); this.displayPage('splash');});
+    page('/home', () => {showHomeFeed(); this.displayPage('feed', true);});
+    page('/recent', () => {showGeneralFeed(); this.displayPage('feed');});
+    page('/post/:postId', (context) => {showPost(context.params.postId); this.displayPage('post');});
+    page('/user/:userId', (context) => {loadUser(context.params.userId); this.displayPage('user-info');});
+    page('/search/:hashtag', (context) => {searchHashtag(context.params.hashtag); this.displayPage('search');});
+    page('/about', () => {clearFeed(); this.displayPage('about');});
+    page('/terms', () => {clearFeed(); this.displayPage('terms');});
+    page('/add', () => {this.displayPage('add', true);});
     page('*', () => page('/'));
 
     // Start routing.
@@ -66,33 +66,22 @@ export default class Router {
   }
 
   /**
-   * Returns a function that displays the given page and hides the other ones.
+   * Displays the given page and hides the other ones.
    * if `onlyAuthed` is set to true then the splash page will be displayed instead of the page if
    * the user is not signed-in.
+   * A "page" is the element with ID "page-<id>" in the DOM.
    */
-  displayPage(attributes, context) {
-    const onlyAuthed = attributes.onlyAuthed;
-
+  async displayPage(pageId, onlyAuthed) {
     if (onlyAuthed) {
       // If the page can only be displayed if the user is authenticated then we wait or the auth state.
-      this.auth.waitForAuth.then(() => {
-        this._displayPage(attributes, context);
-      });
-    } else {
-      this._displayPage(attributes, context);
+      await this.auth.waitForAuth;
+      if (!firebase.auth().currentUser) {
+        return page('/');
+      }
     }
-  }
 
-  _displayPage(attributes, context) {
-    const onlyAuthed = attributes.onlyAuthed;
-    let pageId = attributes.pageId;
-
-    if (onlyAuthed && !firebase.auth().currentUser) {
-      pageId = 'splash';
-      this.splashLogin.show();
-    }
-    Router.setLinkAsActive(context.canonicalPath);
-    this.pagesElements.each(function(index, element) {
+    // Display the right page and hide the other ones.
+    this.pagesElements.each((index, element) => {
       if (element.id === 'page-' + pageId) {
         $(element).show();
       } else if (element.id === 'page-splash' && onlyAuthed) {
@@ -101,8 +90,21 @@ export default class Router {
         $(element).hide();
       }
     });
+
+    // Force close the Drawer if opened.
     MaterialUtils.closeDrawer();
+
+    // Scroll to top.
     Router.scrollToTop();
+  }
+
+  /**
+   * Redirect to the home feed if the user is already signed in.
+   */
+  redirectHomeIfSignedIn() {
+    if (firebase.auth().currentUser) {
+      page('/home');
+    }
   }
 
   /**
@@ -124,33 +126,15 @@ export default class Router {
   }
 
   /**
-   * Pipes the given function and passes the given attribute and Page.js context.
-   * Set 'optContinue' to true if there are further functions to call.
+   * Page.js middleware that highlights the correct menu item/link.
    */
-  static pipe(funct, attribute, optContinue) {
-    return (context, next) => {
-      if (funct) {
-        const params = Object.keys(context.params);
-        if (!attribute && params.length > 0) {
-          funct(context.params[params[0]], context);
-        } else {
-          funct(attribute, context);
-        }
-      }
-      if (optContinue) {
-        next();
-      }
-    };
-  }
-
-  /**
-   * Highlights the correct menu item/link.
-   */
-  static setLinkAsActive(canonicalPath) {
+  static setLinkAsActive(context, next) {
+    const canonicalPath = context.canonicalPath;
     if (canonicalPath === '') {
       canonicalPath = '/';
     }
     $('.is-active').removeClass('is-active');
     $(`[href="${canonicalPath}"]`).addClass('is-active');
+    next();
   }
 };

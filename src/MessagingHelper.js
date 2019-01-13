@@ -35,7 +35,15 @@ export default class Messaging {
 
     // Firebase SDK
     this.auth = firebase.auth();
-    this.messaging = firebase.messaging();
+    try {
+      this.messaging = firebase.messaging();
+    } catch(e) {
+      if (e.code === 'messaging/unsupported-browser') {
+        console.warn('This Browser does not suport FCM. Notifications won\'t be available.', e);
+      } else {
+        throw e;
+      }
+    }
 
     // DOM Elements
     this.enableNotificationsContainer = $('.fp-notifications');
@@ -47,38 +55,43 @@ export default class Messaging {
     // Event bindings
     this.enableNotificationsCheckbox.change(() => this.onEnableNotificationsChange());
     this.auth.onAuthStateChanged(() => this.trackNotificationsEnabledStatus());
-    this.messaging.onTokenRefresh(() => this.saveToken());
-    this.messaging.onMessage((payload) => this.onMessage(payload));
+    if (this.messaging) {
+      this.messaging.onTokenRefresh(() => this.saveToken());
+      this.messaging.onMessage((payload) => this.onMessage(payload));
+    }
   }
 
   /**
    * Saves the token to the database if available. If not request permissions.
    */
-  saveToken() {
-    this.messaging.getToken().then((currentToken) => {
+  async saveToken() {
+    try {
+      const currentToken = await this.messaging.getToken();
       if (currentToken) {
-        return this.firebaseHelper.saveNotificationToken(currentToken).then(() => {
-          console.log('Notification Token saved to database');
-        });
+        await this.firebaseHelper.saveNotificationToken(currentToken);
+        console.log('Notification Token saved to database');
       } else {
         this.requestPermission();
       }
-    }).catch((err) => {
+    } catch(err) {
       console.error('Unable to get messaging token.', err);
-    });
+    }
   }
 
   /**
    * Requests permission to send notifications on this browser.
    */
-  requestPermission() {
+  async requestPermission() {
     console.log('Requesting permission...');
-    this.messaging.requestPermission().then(() => {
+    // TODO: Blackout the entire screen and show a message saying why we need the permissions.
+    //       e.g. "If you would like to receive notifications on this device, grant permission above."
+    try {
+      await this.messaging.requestPermission();
       console.log('Notification permission granted.');
       this.saveToken();
-    }).catch((err) => {
+    } catch(err) {
       console.error('Unable to get permission to notify.', err);
-    });
+    }
   }
 
   /**
@@ -97,7 +110,7 @@ export default class Messaging {
         actionText: 'Profile',
         timeout: 10000,
       };
-      this.toast[0].MaterialSnackbar.showSnackbar(data);
+      MaterialUtils.showSnackbar(this.toast, data);
     }
   }
 
@@ -122,10 +135,10 @@ export default class Messaging {
         this.enableNotificationsLabel.text(data.val() ? 'Notifications Enabled' : 'Enable Notifications');
         MaterialUtils.refreshSwitchState(this.enableNotificationsContainer);
 
-        if (data.val()) {
+        if (data.val() && this.messaging) {
           this.saveToken();
         }
       });
     }
   }
-};
+}

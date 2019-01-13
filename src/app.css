@@ -894,16 +894,25 @@ a {
   padding-right:0;
   display: block;
 }
-#fp-searchResults .fp-searchResultItem .fp-username{
+#fp-searchResults .fp-searchResultItem .fp-username {
   text-overflow: ellipsis;
   white-space: nowrap;
   width: calc(100% - 50px);
   overflow: hidden;
 }
+.fp-searchcontainer .mdl-textfield__input {
+  border-bottom-color: #FFFFFFAA
+}
 
 /* Misc */
 .mdl-snackbar {
   z-index: 101;
+  width: 100%;
+  max-width: 100%;
+  text-align: center;
+  align-items: center;
+  justify-content: center;
+  margin-left: -1px;
 }
 
 /* Firebase UI styling */
@@ -971,6 +980,13 @@ a {
 .mdl-dialog {
   width: 90%;
   max-width: 500px;
+}
+
+dialog::backdrop { /* native */
+  background-color: rgba(0,0,0,.5);;
+}
+dialog + .backdrop { /* polyfill */
+  background-color: rgba(0,0,0,.5);;
 }
 
 .fp-non-eu, .fp-eu {
